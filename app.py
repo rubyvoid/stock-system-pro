@@ -222,27 +222,33 @@ def get_stock_info(ticker_tw: str):
     except Exception:
         return {}
 
-def call_claude(prompt: str) -> str | None:
-    """呼叫 Claude API"""
+def call_gemini(prompt: str, system: str = "") -> str | None:
+    """呼叫 Google Gemini API（免費，每日 1500 次）"""
     try:
-        api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
         if not api_key:
             return None
+        sys_prompt = system or "你是一位專業的台灣股市分析師，熟悉台股生態、法人籌碼、技術分析與基本面。請用繁體中文回答，條列重點，語氣專業但易懂，每點說明清楚。"
+        full_prompt = sys_prompt + "\n\n" + prompt
         r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key,
-                     "anthropic-version": "2023-06-01",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+            headers={"x-goog-api-key": api_key,
                      "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-5", "max_tokens": 1024,
-                  "system": "你是一位台灣股市分析師，熟悉台股生態、法人籌碼、技術分析與基本面。請用繁體中文回答，條列重點，語氣專業但易懂。",
-                  "messages": [{"role": "user", "content": prompt}]},
+            json={"contents": [{"parts": [{"text": full_prompt}]}],
+                  "generationConfig": {"maxOutputTokens": 1024,
+                                       "temperature": 0.7}},
             timeout=30
         )
         if r.status_code == 200:
-            return r.json()["content"][0]["text"]
+            data = r.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception:
         pass
     return None
+
+# 向下相容：保留 call_claude 名稱，內部改呼叫 Gemini
+def call_claude(prompt: str) -> str | None:
+    return call_gemini(prompt)
 
 def render_ai(text: str, badge: str = "AI 分析"):
     st.markdown(f"""
@@ -500,7 +506,7 @@ MACD：{macd_val:.3f if macd_val else 'N/A'}
             if ai_result:
                 render_ai(ai_result, f"AI 技術分析 · {ticker_full}")
             else:
-                st.info("請在 Streamlit Secrets 設定 ANTHROPIC_API_KEY 以啟用 AI 分析")
+                st.info("請在 Streamlit Secrets 設定 GEMINI_API_KEY 以啟用 AI 分析（Google 免費）")
 
 # ══════════════════════════════════════════════════════
 # 模組二：選股篩選器
@@ -653,7 +659,7 @@ RSI 超賣閾值 {filter_rsi_low}、均線金叉：{'是' if filter_ma_cross els
                     if ai_res:
                         render_ai(ai_res, "AI 選股策略分析")
                     else:
-                        st.info("請設定 ANTHROPIC_API_KEY 以啟用 AI 分析")
+                        st.info("請設定 GEMINI_API_KEY 以啟用 AI 分析（Google 免費）")
             else:
                 st.warning("""
 ⚠️ TWSE API 及備援模式均無法取得資料。
@@ -863,7 +869,7 @@ elif module == "🤖 AI 選股":
                 "Claude AI · 個股深度分析 · 市場情緒判讀",
                 "#0a0a1a", "#1a1a3e", "#312e81", "#a5b4fc")
 
-    st.info("💡 AI 功能需要在 Streamlit Secrets 設定 `ANTHROPIC_API_KEY`")
+    st.info("💡 AI 功能使用 Google Gemini（免費）。請在 Streamlit Secrets 設定 `GEMINI_API_KEY`，前往 [ai.google.dev](https://ai.google.dev) 免費取得，每日 1,500 次不需信用卡。")
 
     tab1, tab2, tab3 = st.tabs(["🔍 個股 AI 分析", "🌏 市場情緒分析", "📋 選股報告生成"])
 
@@ -917,7 +923,7 @@ EPS：{info.get('trailingEps','N/A')}
                     if ai_result:
                         render_ai(ai_result, f"AI 深度分析 · {ticker_full}")
                     else:
-                        st.warning("AI 服務暫不可用，請確認 ANTHROPIC_API_KEY 設定")
+                        st.warning("AI 服務暫不可用，請確認 GEMINI_API_KEY 設定")
                 else:
                     st.error("無法取得股價資料")
 
