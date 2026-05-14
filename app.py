@@ -965,13 +965,9 @@ elif module == "🤖 AI 選股":
 
             # ══ LSTM 訓練 ══
             with st.spinner("LSTM 深度學習訓練中（價格走勢預測，約 20~30 秒）..."):
-                import os
-                os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-                import tensorflow as tf
-                tf.get_logger().setLevel('ERROR')
-                from tensorflow.keras.models import Sequential
-                from tensorflow.keras.layers import LSTM, Dense, Dropout
-                from tensorflow.keras.callbacks import EarlyStopping
+                from keras.models import Sequential
+                from keras.layers import LSTM, Dense, Dropout
+                from keras.callbacks import EarlyStopping
 
                 scaler = MinMaxScaler()
                 price_scaled = scaler.fit_transform(df_raw[['Close']].values)
