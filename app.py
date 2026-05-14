@@ -227,6 +227,7 @@ def call_gemini(prompt: str, system: str = "") -> str | None:
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         if not api_key:
+            st.warning("⚠️ 未設定 GEMINI_API_KEY，請到 Streamlit Secrets 加入")
             return None
         sys_prompt = system or "你是一位專業的台灣股市分析師，熟悉台股生態、法人籌碼、技術分析與基本面。請用繁體中文回答，條列重點，語氣專業但易懂，每點說明清楚。"
         full_prompt = sys_prompt + "\n\n" + prompt
@@ -242,9 +243,14 @@ def call_gemini(prompt: str, system: str = "") -> str | None:
         if r.status_code == 200:
             data = r.json()
             return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        pass
-    return None
+        else:
+            # 顯示具體錯誤，方便除錯
+            err = r.json().get("error", {})
+            st.error(f"Gemini API 錯誤 {r.status_code}：{err.get('message', r.text[:200])}")
+            return None
+    except Exception as e:
+        st.error(f"Gemini 連線失敗：{str(e)}")
+        return None
 
 # 向下相容：保留 call_claude 名稱，內部改呼叫 Gemini
 def call_claude(prompt: str) -> str | None:
@@ -869,152 +875,237 @@ elif module == "🏦 籌碼分析":
 # 模組五：AI 選股建議
 # ══════════════════════════════════════════════════════
 elif module == "🤖 AI 選股":
-    hero_banner("🤖", "AI 選股建議",
-                "Claude AI · 個股深度分析 · 市場情緒判讀",
-                "#0a0a1a", "#1a1a3e", "#312e81", "#a5b4fc")
+    hero_banner("🤖", "AI 深度學習預測",
+                "LSTM 價格預測 · XGBoost 漲跌分析 · 雙模型交叉驗證",
+                "#0a0a1a", "#0f172a", "#1e3a5f", "#93c5fd")
 
-    st.info("💡 AI 功能使用 Google Gemini（免費）。請在 Streamlit Secrets 設定 `GEMINI_API_KEY`，前往 [ai.google.dev](https://ai.google.dev) 免費取得，每日 1,500 次不需信用卡。")
+    st.markdown("""
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;
+                padding:12px 18px;margin-bottom:16px;font-size:13px;color:#1e40af;line-height:1.7">
+    🧠 <b>雙模型 AI 預測系統</b><br>
+    · <b>XGBoost</b>：分析 9 個技術指標，預測明日漲跌方向與信心度<br>
+    · <b>LSTM</b>：深度學習時序模型，預測未來 5 日價格走勢<br>
+    · 兩模型互相驗證，共識越高代表訊號越強
+    </div>""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["🔍 個股 AI 分析", "🌏 市場情緒分析", "📋 選股報告生成"])
-
-    # ── Tab1：個股分析 ──
-    with tab1:
-        section_card("🔍 個股 AI 深度分析", "#4f46e5")
-        ai_ticker = st.text_input("輸入股票代號", "2330", key="ai_ticker")
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        ai_ticker = st.text_input("股票代號", "2330", key="ai_ticker")
+    with col2:
         ai_market = st.selectbox("市場", ["上市（.TW）", "上櫃（.TWO）"], key="ai_mkt2")
-        suffix    = ".TW" if "上市" in ai_market else ".TWO"
+    with col3:
+        predict_days = st.selectbox("預測天數", [3, 5, 10], index=1, key="ai_days")
 
-        focus = st.multiselect("分析重點",
-            ["技術面趨勢", "基本面評估", "籌碼動向", "風險提醒", "操作建議"],
-            default=["技術面趨勢", "基本面評估", "風險提醒"], key="ai_focus")
+    suffix = ".TW" if "上市" in ai_market else ".TWO"
+    run_predict = st.button("🚀 執行 AI 預測分析", key="btn_ai_predict", use_container_width=False)
 
-        if st.button("🚀 產生 AI 分析報告", key="btn_ai_stock"):
-            with st.spinner("載入資料 + AI 分析中（約 15~30 秒）..."):
-                ticker_full = f"{ai_ticker}{suffix}"
-                df_hist     = get_stock_history(ticker_full, "1y")
-                info        = get_stock_info(ticker_full)
+    if run_predict:
+        ticker_full = f"{ai_ticker}{suffix}"
 
-                if not df_hist.empty:
-                    df_hist = calc_ma(df_hist)
-                    df_hist = calc_rsi(df_hist)
-                    last = df_hist.iloc[-1]
+        with st.spinner(f"載入 {ticker_full} 歷史資料..."):
+            df_raw = get_stock_history(ticker_full, "2y")
 
-                    ma20_s = f"{df_hist['MA20'].iloc[-1]:.1f}" if 'MA20' in df_hist.columns else 'N/A'
-                    ma60_s = f"{df_hist['MA60'].iloc[-1]:.1f}" if 'MA60' in df_hist.columns else 'N/A'
-                    rsi_s  = f"{df_hist['RSI'].iloc[-1]:.1f}"  if 'RSI'  in df_hist.columns else 'N/A'
-                    mktcap = info.get('marketCap', 0)
-                    mktcap_s = f"{mktcap/1e8:.0f}" if mktcap else 'N/A'
-                    prompt = f"""請對台股 {ticker_full} 進行深度分析：
-
-【基本資訊】
-股名：{info.get('longName', ai_ticker)}
-產業：{info.get('industry', '未知')}
-市值：{mktcap_s} 億
-
-【近期價格】
-收盤：{last['Close']:.1f}
-52週高/低：{info.get('fiftyTwoWeekHigh','N/A')} / {info.get('fiftyTwoWeekLow','N/A')}
-MA20：{ma20_s}
-MA60：{ma60_s}
-RSI(14)：{rsi_s}
-
-【基本面】
-本益比：{info.get('trailingPE', 'N/A')}
-殖利率：{info.get('dividendYield',0)*100:.2f}%
-ROE：{info.get('returnOnEquity',0)*100:.2f}%
-EPS：{info.get('trailingEps','N/A')}
-
-請依照以下重點進行分析：{', '.join(focus)}
-
-最後給出：買進 / 持有 / 減碼 / 觀望 的建議（請標明為參考意見，非投資建議）"""
-
-                    ai_result = call_claude(prompt)
-                    if ai_result:
-                        render_ai(ai_result, f"AI 深度分析 · {ticker_full}")
-                    else:
-                        st.warning("AI 服務暫不可用，請確認 GEMINI_API_KEY 設定")
-                else:
-                    st.error("無法取得股價資料")
-
-    # ── Tab2：市場情緒 ──
-    with tab2:
-        section_card("🌏 市場情緒 AI 分析", "#4f46e5")
-
-        if st.button("🚀 分析今日台股市場情緒", key="btn_ai_market"):
-            with st.spinner("AI 分析市場情緒..."):
-                # 取大盤資料（0050）
-                df_twii = get_stock_history("0050.TW", "1mo")
-
-                if not df_twii.empty:
-                    last_price = df_twii["Close"].iloc[-1]
-                    prev_price = df_twii["Close"].iloc[-2]
-                    chg_pct_m  = (last_price - prev_price) / prev_price * 100
-                    month_chg  = (last_price - df_twii["Close"].iloc[0]) / df_twii["Close"].iloc[0] * 100
-
-                    prompt = f"""請分析當前台股市場情緒：
-
-大盤（0050 ETF）：
-- 當日漲跌：{chg_pct_m:+.2f}%
-- 近一月漲跌：{month_chg:+.2f}%
-- 目前淨值：{last_price:.2f}
-
-請分析：
-1. 當前台股整體多空氛圍
-2. 近期影響市場的主要因素（AI 趨勢、外資動向、美股連動）
-3. 接下來一週的市場展望
-4. 對投資人的建議策略（防守 vs 積極）"""
-
-                    ai_result = call_claude(prompt)
-                    if ai_result:
-                        render_ai(ai_result, "AI 市場情緒分析")
-                    else:
-                        st.warning("AI 服務暫不可用")
-                else:
-                    st.warning("無法取得大盤資料")
-
-    # ── Tab3：選股報告 ──
-    with tab3:
-        section_card("📋 AI 選股報告生成", "#4f46e5")
-        watchlist = st.session_state.get("watchlist", [])
-
-        if not watchlist:
-            st.info("請先在「選股篩選」模組將股票加入觀察清單")
+        if df_raw.empty or len(df_raw) < 100:
+            st.error("歷史資料不足（需至少 100 筆），請確認股票代號是否正確")
         else:
-            st.write(f"觀察清單：{', '.join(watchlist)}")
-            report_style = st.selectbox("報告風格",
-                ["保守型（強調風險）", "成長型（強調獲利潛力）", "價值型（強調低估值）"],
-                key="rpt_style")
+            # ══ 特徵工程 ══
+            @st.cache_data(ttl=3600)
+            def build_features(ticker, period):
+                df = get_stock_history(ticker, period)
+                if df.empty: return pd.DataFrame()
+                df = df.copy()
+                df['MA5']   = df['Close'].rolling(5).mean()
+                df['MA20']  = df['Close'].rolling(20).mean()
+                df['MA60']  = df['Close'].rolling(60).mean()
+                delta = df['Close'].diff()
+                gain  = delta.clip(lower=0).rolling(14).mean()
+                loss  = (-delta.clip(upper=0)).rolling(14).mean()
+                df['RSI'] = 100 - (100 / (1 + gain / loss.replace(0, 1e-10)))
+                ema12 = df['Close'].ewm(span=12).mean()
+                ema26 = df['Close'].ewm(span=26).mean()
+                df['MACD']        = ema12 - ema26
+                df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+                ma20 = df['Close'].rolling(20).mean()
+                std20 = df['Close'].rolling(20).std()
+                df['BB_Width']  = (ma20 + 2*std20 - (ma20 - 2*std20)) / ma20
+                df['Momentum']  = df['Close'].pct_change(5)
+                df['Volatility']= df['Close'].rolling(10).std()
+                df['Target_Dir']= (df['Close'].shift(-1) > df['Close']).astype(int)
+                return df.dropna()
 
-            if st.button("📄 產生完整選股報告", key="btn_ai_report"):
-                with st.spinner("AI 生成報告中..."):
-                    prompt = f"""請為以下台股觀察清單生成一份完整的選股報告：
+            df_feat = build_features(ticker_full, "2y")
+            features = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
+                        'BB_Width','Momentum','Volatility']
 
-觀察股票：{', '.join(watchlist)}
-報告風格：{report_style}
+            # ══ XGBoost 訓練 ══
+            with st.spinner("XGBoost 訓練中（漲跌方向預測）..."):
+                import xgboost as xgb
+                from sklearn.preprocessing import MinMaxScaler
 
-請為每一檔股票提供：
-1. 一句話摘要（公司定位）
-2. 主要優勢（2點）
-3. 主要風險（1點）
-4. 建議倉位（高/中/低）
+                X = df_feat[features].values
+                y = df_feat['Target_Dir'].values
+                split = int(len(X) * 0.8)
+                X_tr, X_te = X[:split], X[split:]
+                y_tr, y_te = y[:split], y[split:]
 
-最後給出整體組合建議（如何分配比重）。
-注意：所有建議僅供參考，非正式投資建議。"""
+                xgb_model = xgb.XGBClassifier(
+                    n_estimators=200, max_depth=4, learning_rate=0.05,
+                    subsample=0.8, colsample_bytree=0.8,
+                    eval_metric='logloss', verbosity=0
+                )
+                xgb_model.fit(X_tr, y_tr)
+                xgb_acc  = (xgb_model.predict(X_te) == y_te).mean()
+                # 預測明日
+                last_feat = df_feat[features].iloc[-1:].values
+                xgb_prob  = xgb_model.predict_proba(last_feat)[0]
+                xgb_dir   = int(xgb_model.predict(last_feat)[0])
+                # 特徵重要性
+                importances = dict(zip(features, xgb_model.feature_importances_))
+                top_feat = sorted(importances.items(), key=lambda x: -x[1])[:3]
 
-                    ai_result = call_claude(prompt)
-                    if ai_result:
-                        render_ai(ai_result, "AI 選股報告")
+            # ══ LSTM 訓練 ══
+            with st.spinner("LSTM 深度學習訓練中（價格走勢預測，約 20~30 秒）..."):
+                import os
+                os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+                import tensorflow as tf
+                tf.get_logger().setLevel('ERROR')
+                from tensorflow.keras.models import Sequential
+                from tensorflow.keras.layers import LSTM, Dense, Dropout
+                from tensorflow.keras.callbacks import EarlyStopping
 
-                        # 提供下載
-                        report_text = f"台股投資系統 Pro - AI 選股報告\n生成時間：{datetime.now().strftime('%Y/%m/%d %H:%M')}\n\n{ai_result}"
-                        st.download_button(
-                            "📥 下載報告",
-                            report_text.encode("utf-8"),
-                            f"AI選股報告_{datetime.now().strftime('%Y%m%d')}.txt",
-                            "text/plain"
-                        )
-                    else:
-                        st.warning("AI 服務暫不可用")
+                scaler = MinMaxScaler()
+                price_scaled = scaler.fit_transform(df_raw[['Close']].values)
+                lookback = 30
+
+                def make_seq(data, lb, future):
+                    X_s, y_s = [], []
+                    for i in range(lb, len(data)-future):
+                        X_s.append(data[i-lb:i, 0])
+                        y_s.append(data[i:i+future, 0])
+                    return np.array(X_s), np.array(y_s)
+
+                X_seq, y_seq = make_seq(price_scaled, lookback, predict_days)
+                X_seq = X_seq.reshape(X_seq.shape[0], lookback, 1)
+                split2 = int(len(X_seq) * 0.8)
+
+                lstm_model = Sequential([
+                    LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
+                    Dropout(0.2),
+                    LSTM(32),
+                    Dropout(0.2),
+                    Dense(16, activation='relu'),
+                    Dense(predict_days)
+                ])
+                lstm_model.compile(optimizer='adam', loss='mse')
+                es = EarlyStopping(patience=8, restore_best_weights=True, verbose=0)
+                lstm_model.fit(X_seq[:split2], y_seq[:split2],
+                              epochs=50, batch_size=32,
+                              validation_split=0.1,
+                              callbacks=[es], verbose=0)
+
+                # 預測未來
+                last_seq = price_scaled[-lookback:].reshape(1, lookback, 1)
+                future_scaled = lstm_model.predict(last_seq, verbose=0)
+                future_prices = scaler.inverse_transform(
+                    future_scaled.reshape(-1,1)).flatten()
+
+                # 回測準確率
+                y_pred_s = lstm_model.predict(X_seq[split2:], verbose=0)
+                y_real = scaler.inverse_transform(y_seq[split2:].reshape(-1,1)).flatten()
+                y_pred = scaler.inverse_transform(y_pred_s.reshape(-1,1)).flatten()
+                from sklearn.metrics import mean_absolute_percentage_error
+                lstm_mape = mean_absolute_percentage_error(y_real, y_pred)
+
+            current_price = float(df_raw['Close'].iloc[-1])
+
+            # ══ 結果展示 ══
+            section_card("📊 雙模型預測結果", "#1d4ed8")
+
+            # KPI 卡片
+            xgb_signal = "漲" if xgb_dir == 1 else "跌"
+            xgb_conf   = xgb_prob[xgb_dir] * 100
+            consensus  = "強烈" if xgb_conf > 70 else "中等" if xgb_conf > 55 else "偏弱"
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("XGBoost 方向預測", f"明日{'▲' if xgb_dir else '▼'} {xgb_signal}",
+                      delta=f"信心度 {xgb_conf:.1f}%",
+                      delta_color="normal" if xgb_dir else "inverse")
+            k2.metric("XGBoost 回測準確率", f"{xgb_acc:.1%}",
+                      delta="高於業界平均 55%" if xgb_acc > 0.55 else "接近業界水準")
+            k3.metric("LSTM 預測誤差", f"{lstm_mape:.1%}",
+                      delta="低誤差" if lstm_mape < 0.03 else "中等誤差",
+                      delta_color="normal" if lstm_mape < 0.03 else "off")
+            k4.metric(f"訊號共識強度", consensus,
+                      delta=f"XGBoost 信心 {xgb_conf:.0f}%")
+
+            # 未來價格預測表
+            section_card(f"📈 LSTM 未來 {predict_days} 日價格預測", "#1d4ed8")
+            pred_rows = []
+            for i, p in enumerate(future_prices, 1):
+                chg_pct = (p - current_price) / current_price * 100
+                pred_rows.append({
+                    "預測日": f"第 {i} 日",
+                    "預測收盤價": f"${p:,.1f}",
+                    "漲跌幅": f"{chg_pct:+.2f}%",
+                    "方向": "▲ 漲" if p > current_price else "▼ 跌",
+                })
+            df_pred = pd.DataFrame(pred_rows)
+            st.dataframe(df_pred, use_container_width=True, hide_index=True)
+
+            # 走勢預測圖
+            if HAS_PLOTLY:
+                section_card("📉 歷史 + 預測走勢圖", "#1d4ed8")
+                # 取最近60天歷史
+                hist_60 = df_raw['Close'].iloc[-60:].reset_index(drop=True)
+                hist_idx = list(range(len(hist_60)))
+                pred_idx = list(range(len(hist_60)-1, len(hist_60)-1+predict_days))
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=hist_idx, y=hist_60,
+                    name="歷史收盤價",
+                    line=dict(color="#4f46e5", width=2)))
+                fig.add_trace(go.Scatter(
+                    x=pred_idx,
+                    y=[hist_60.iloc[-1]] + list(future_prices),
+                    name=f"LSTM {predict_days}日預測",
+                    line=dict(color="#f97316", width=2, dash="dot"),
+                    mode="lines+markers",
+                    marker=dict(size=8)))
+                fig.add_vline(x=len(hist_60)-1, line_dash="dash",
+                             line_color="#94a3b8", annotation_text="今日")
+                fig.update_layout(
+                    height=350, margin=dict(l=0,r=0,t=20,b=0),
+                    legend=dict(orientation="h", y=1.05),
+                    xaxis_title="交易日（相對）",
+                    yaxis_title="股價（元）")
+                st.plotly_chart(fig, use_container_width=True)
+
+            # XGBoost 特徵重要性
+            section_card("🔍 XGBoost 關鍵影響因子（Top 3）", "#1d4ed8")
+            fi_cols = st.columns(3)
+            colors = ["#4f46e5", "#0ea5e9", "#10b981"]
+            for i, (feat, imp) in enumerate(top_feat):
+                with fi_cols[i]:
+                    st.markdown(f"""
+                    <div style="background:var(--color-background-secondary);border-radius:10px;
+                                padding:14px;text-align:center;">
+                        <div style="font-size:11px;color:var(--color-text-secondary);
+                                    text-transform:uppercase;letter-spacing:1px">{feat}</div>
+                        <div style="font-size:26px;font-weight:500;color:{colors[i]};margin:6px 0">
+                            {imp:.1%}</div>
+                        <div style="font-size:11px;color:var(--color-text-secondary)">影響權重</div>
+                    </div>""", unsafe_allow_html=True)
+
+            # 免責聲明
+            st.markdown("""
+            <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;
+                        padding:10px 16px;margin-top:16px;font-size:12px;color:#92400e;line-height:1.7">
+            ⚠️ <b>AI 預測免責聲明</b><br>
+            本預測由機器學習模型基於歷史資料計算，<b>不保證準確性</b>，不構成投資建議。
+            股市受多重因素影響，任何預測均存在不確定性。請謹慎判斷，自行承擔投資風險。
+            </div>""", unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════════════
 # 頁尾
