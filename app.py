@@ -876,7 +876,7 @@ elif module == "🏦 籌碼分析":
 # ══════════════════════════════════════════════════════
 elif module == "🤖 AI 選股":
     hero_banner("🤖", "AI 深度學習預測",
-                "LSTM 價格預測 · XGBoost 漲跌分析 · 雙模型交叉驗證",
+                "XGBoost 漲跌預測 · RandomForest 價格預測 · 雙模型交叉驗證",
                 "#0a0a1a", "#0f172a", "#1e3a5f", "#93c5fd")
 
     st.markdown("""
@@ -884,7 +884,7 @@ elif module == "🤖 AI 選股":
                 padding:12px 18px;margin-bottom:16px;font-size:13px;color:#1e40af;line-height:1.7">
     🧠 <b>雙模型 AI 預測系統</b><br>
     · <b>XGBoost</b>：分析 9 個技術指標，預測明日漲跌方向與信心度<br>
-    · <b>LSTM</b>：深度學習時序模型，預測未來 5 日價格走勢<br>
+    · <b>RandomForest</b>：集成學習模型，預測未來多日價格走勢<br>
     · 兩模型互相驗證，共識越高代表訊號越強
     </div>""", unsafe_allow_html=True)
 
@@ -934,6 +934,11 @@ elif module == "🤖 AI 選股":
                 return df.dropna()
 
             df_feat = build_features(ticker_full, "2y")
+            # 確保 current_price_ref 跟 df_feat 同步，用 df_feat 的最後一筆
+            _sync_price = float(df_feat['Close'].iloc[-1])
+            # 如果 df_raw 最新價跟 df_feat 差距超過 5%，用 df_feat 的（避免時間不同步）
+            _raw_price  = float(df_raw['Close'].iloc[-1])
+            _use_price  = _raw_price if abs(_raw_price - _sync_price) / _sync_price < 0.05 else _sync_price
             features = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
                         'BB_Width','Momentum','Volatility']
 
@@ -963,7 +968,7 @@ elif module == "🤖 AI 選股":
                 importances = dict(zip(features, xgb_model.feature_importances_))
                 top_feat = sorted(importances.items(), key=lambda x: -x[1])[:3]
 
-            # ══ RandomForest 價格預測（取代 LSTM，純 scikit-learn，無需深度學習框架）══
+            # ══ RandomForest 價格預測（純 scikit-learn，無需深度學習框架）══
             with st.spinner("RandomForest 訓練中（多日價格預測，約 5~10 秒）..."):
                 from sklearn.ensemble import RandomForestRegressor
                 from sklearn.metrics import mean_absolute_percentage_error
@@ -972,40 +977,51 @@ elif module == "🤖 AI 選股":
                 feat_cols = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
                              'BB_Width','Momentum','Volatility']
 
-                # 建立滑動視窗特徵（30天視窗預測未來N天）
-                X_win, y_price_win = [], []
+                # ── 用當前真實價格做基準，預測漲跌幅再換算絕對價格 ──
+                current_price_ref = _use_price  # 已同步校正
+
+                # 建立滑動視窗：X = 技術指標，y = 未來N天的漲跌幅（%）
+                X_win, y_ret_win = [], []
                 for i in range(lookback, len(df_feat)-predict_days):
                     window = df_feat[feat_cols].iloc[i-lookback:i].values.flatten()
-                    prices_fut = df_feat['Close'].iloc[i:i+predict_days].values
+                    base   = df_feat['Close'].iloc[i]  # window 最後一天的收盤（預測起點）
+                    # 預測「相對漲跌幅」，基準是 window 最後一天
+                    rets = [(df_feat['Close'].iloc[i+d] - base) / base
+                            for d in range(predict_days)]
                     X_win.append(window)
-                    y_price_win.append(prices_fut)
+                    y_ret_win.append(rets)
 
-                X_win = np.array(X_win)
-                y_price_win = np.array(y_price_win)
-                split2 = int(len(X_win) * 0.8)
+                X_win    = np.array(X_win)
+                y_ret_win = np.array(y_ret_win)
+                split2   = int(len(X_win) * 0.8)
 
-                # 訓練每一天各一個 RF 模型
+                # 訓練每一天各一個 RF 模型（預測漲跌幅）
                 rf_models = []
                 for d in range(predict_days):
                     rf = RandomForestRegressor(
-                        n_estimators=100, max_depth=8,
+                        n_estimators=150, max_depth=6,
                         n_jobs=-1, random_state=42)
-                    rf.fit(X_win[:split2], y_price_win[:split2, d])
+                    rf.fit(X_win[:split2], y_ret_win[:split2, d])
                     rf_models.append(rf)
 
-                # 預測未來 N 天
+                # 預測：用最近 lookback 天的特徵預測未來漲跌幅，再乘以當前價格
                 last_win = df_feat[feat_cols].iloc[-lookback:].values.flatten().reshape(1,-1)
-                future_prices = np.array([m.predict(last_win)[0] for m in rf_models])
+                pred_rets = np.array([m.predict(last_win)[0] for m in rf_models])
+                future_prices = current_price_ref * (1 + pred_rets)
 
-                # 回測 MAPE
-                y_te_rf = y_price_win[split2:]
-                y_pr_rf = np.array([[m.predict(X_win[split2+i:split2+i+1])[0]
-                                     for m in rf_models]
-                                    for i in range(len(y_te_rf))])
+                # 回測 MAPE（以漲跌幅計算）
+                y_te_ret = y_ret_win[split2:]
+                y_pr_ret = np.array([[m.predict(X_win[split2+i:split2+i+1])[0]
+                                      for m in rf_models]
+                                     for i in range(len(y_te_ret))])
+                # 轉回價格計算 MAPE
+                base_prices = df_feat['Close'].iloc[lookback+split2:lookback+split2+len(y_te_ret)].values
+                y_real_p = base_prices.reshape(-1,1) * (1 + y_te_ret)
+                y_pred_p = base_prices.reshape(-1,1) * (1 + y_pr_ret)
                 lstm_mape = mean_absolute_percentage_error(
-                    y_te_rf.flatten(), y_pr_rf.flatten())
+                    y_real_p.flatten(), y_pred_p.flatten())
 
-            current_price = float(df_raw['Close'].iloc[-1])
+            current_price = current_price_ref  # 已在 RF 訓練時設定
 
             # ══ 結果展示 ══
             section_card("📊 雙模型預測結果", "#1d4ed8")
@@ -1028,7 +1044,7 @@ elif module == "🤖 AI 選股":
                       delta=f"XGBoost 信心 {xgb_conf:.0f}%")
 
             # 未來價格預測表
-            section_card(f"📈 LSTM 未來 {predict_days} 日價格預測", "#1d4ed8")
+            section_card(f"📈 RF 未來 {predict_days} 日價格預測", "#1d4ed8")
             pred_rows = []
             for i, p in enumerate(future_prices, 1):
                 chg_pct = (p - current_price) / current_price * 100
@@ -1043,7 +1059,7 @@ elif module == "🤖 AI 選股":
 
             # 走勢預測圖
             if HAS_PLOTLY:
-                section_card("📉 歷史 + 預測走勢圖", "#1d4ed8")
+                section_card("📉 歷史 + RF 預測走勢圖", "#1d4ed8")
                 # 取最近60天歷史
                 hist_60 = df_raw['Close'].iloc[-60:].reset_index(drop=True)
                 hist_idx = list(range(len(hist_60)))
@@ -1057,7 +1073,7 @@ elif module == "🤖 AI 選股":
                 fig.add_trace(go.Scatter(
                     x=pred_idx,
                     y=[hist_60.iloc[-1]] + list(future_prices),
-                    name=f"LSTM {predict_days}日預測",
+                    name=f"RF {predict_days}日預測",
                     line=dict(color="#f97316", width=2, dash="dot"),
                     mode="lines+markers",
                     marker=dict(size=8)))
