@@ -963,54 +963,47 @@ elif module == "🤖 AI 選股":
                 importances = dict(zip(features, xgb_model.feature_importances_))
                 top_feat = sorted(importances.items(), key=lambda x: -x[1])[:3]
 
-            # ══ LSTM 訓練 ══
-            with st.spinner("LSTM 深度學習訓練中（價格走勢預測，約 20~30 秒）..."):
-                from keras.models import Sequential
-                from keras.layers import LSTM, Dense, Dropout
-                from keras.callbacks import EarlyStopping
-
-                scaler = MinMaxScaler()
-                price_scaled = scaler.fit_transform(df_raw[['Close']].values)
-                lookback = 30
-
-                def make_seq(data, lb, future):
-                    X_s, y_s = [], []
-                    for i in range(lb, len(data)-future):
-                        X_s.append(data[i-lb:i, 0])
-                        y_s.append(data[i:i+future, 0])
-                    return np.array(X_s), np.array(y_s)
-
-                X_seq, y_seq = make_seq(price_scaled, lookback, predict_days)
-                X_seq = X_seq.reshape(X_seq.shape[0], lookback, 1)
-                split2 = int(len(X_seq) * 0.8)
-
-                lstm_model = Sequential([
-                    LSTM(64, return_sequences=True, input_shape=(lookback, 1)),
-                    Dropout(0.2),
-                    LSTM(32),
-                    Dropout(0.2),
-                    Dense(16, activation='relu'),
-                    Dense(predict_days)
-                ])
-                lstm_model.compile(optimizer='adam', loss='mse')
-                es = EarlyStopping(patience=8, restore_best_weights=True, verbose=0)
-                lstm_model.fit(X_seq[:split2], y_seq[:split2],
-                              epochs=50, batch_size=32,
-                              validation_split=0.1,
-                              callbacks=[es], verbose=0)
-
-                # 預測未來
-                last_seq = price_scaled[-lookback:].reshape(1, lookback, 1)
-                future_scaled = lstm_model.predict(last_seq, verbose=0)
-                future_prices = scaler.inverse_transform(
-                    future_scaled.reshape(-1,1)).flatten()
-
-                # 回測準確率
-                y_pred_s = lstm_model.predict(X_seq[split2:], verbose=0)
-                y_real = scaler.inverse_transform(y_seq[split2:].reshape(-1,1)).flatten()
-                y_pred = scaler.inverse_transform(y_pred_s.reshape(-1,1)).flatten()
+            # ══ RandomForest 價格預測（取代 LSTM，純 scikit-learn，無需深度學習框架）══
+            with st.spinner("RandomForest 訓練中（多日價格預測，約 5~10 秒）..."):
+                from sklearn.ensemble import RandomForestRegressor
                 from sklearn.metrics import mean_absolute_percentage_error
-                lstm_mape = mean_absolute_percentage_error(y_real, y_pred)
+
+                lookback = 30
+                feat_cols = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
+                             'BB_Width','Momentum','Volatility']
+
+                # 建立滑動視窗特徵（30天視窗預測未來N天）
+                X_win, y_price_win = [], []
+                for i in range(lookback, len(df_feat)-predict_days):
+                    window = df_feat[feat_cols].iloc[i-lookback:i].values.flatten()
+                    prices_fut = df_feat['Close'].iloc[i:i+predict_days].values
+                    X_win.append(window)
+                    y_price_win.append(prices_fut)
+
+                X_win = np.array(X_win)
+                y_price_win = np.array(y_price_win)
+                split2 = int(len(X_win) * 0.8)
+
+                # 訓練每一天各一個 RF 模型
+                rf_models = []
+                for d in range(predict_days):
+                    rf = RandomForestRegressor(
+                        n_estimators=100, max_depth=8,
+                        n_jobs=-1, random_state=42)
+                    rf.fit(X_win[:split2], y_price_win[:split2, d])
+                    rf_models.append(rf)
+
+                # 預測未來 N 天
+                last_win = df_feat[feat_cols].iloc[-lookback:].values.flatten().reshape(1,-1)
+                future_prices = np.array([m.predict(last_win)[0] for m in rf_models])
+
+                # 回測 MAPE
+                y_te_rf = y_price_win[split2:]
+                y_pr_rf = np.array([[m.predict(X_win[split2+i:split2+i+1])[0]
+                                     for m in rf_models]
+                                    for i in range(len(y_te_rf))])
+                lstm_mape = mean_absolute_percentage_error(
+                    y_te_rf.flatten(), y_pr_rf.flatten())
 
             current_price = float(df_raw['Close'].iloc[-1])
 
@@ -1028,7 +1021,7 @@ elif module == "🤖 AI 選股":
                       delta_color="normal" if xgb_dir else "inverse")
             k2.metric("XGBoost 回測準確率", f"{xgb_acc:.1%}",
                       delta="高於業界平均 55%" if xgb_acc > 0.55 else "接近業界水準")
-            k3.metric("LSTM 預測誤差", f"{lstm_mape:.1%}",
+            k3.metric("RF 預測誤差", f"{lstm_mape:.1%}",
                       delta="低誤差" if lstm_mape < 0.03 else "中等誤差",
                       delta_color="normal" if lstm_mape < 0.03 else "off")
             k4.metric(f"訊號共識強度", consensus,
