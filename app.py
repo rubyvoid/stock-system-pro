@@ -1,7 +1,7 @@
 """
 台股投資系統 Pro  |  stock_app.py
 資料來源：TWSE OpenAPI、TPEx OpenAPI、yfinance
-作者：Kevin Pan（諾億保經）
+作者：Kevin Pan
 """
 
 import streamlit as st
@@ -13,6 +13,45 @@ import json
 import os
 from datetime import datetime, timedelta
 from io import BytesIO
+
+# ══════════════════════════════════════════════════════
+# 密碼保護（Public App 也能擋住陌生人）
+# ══════════════════════════════════════════════════════
+def check_password():
+    """簡單密碼驗證，密碼存在 Streamlit Secrets"""
+    pw = st.secrets.get("APP_PASSWORD", "")
+    if not pw:
+        return True  # 沒設密碼就直接進入（開發模式）
+
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if st.session_state["authenticated"]:
+        return True
+
+    st.markdown("""
+    <div style="max-width:400px;margin:80px auto;text-align:center;">
+        <div style="font-size:48px;">📈</div>
+        <h2 style="margin:12px 0 4px;">台股投資系統 Pro</h2>
+        <p style="color:#888;margin-bottom:24px;">請輸入授權密碼以繼續</p>
+    </div>""", unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        entered = st.text_input("密碼", type="password", key="pw_input",
+                                placeholder="請輸入密碼")
+        if st.button("進入系統", use_container_width=True, key="btn_pw"):
+            if entered == pw:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ 密碼錯誤，請重試")
+    st.stop()
+    return False
+
+check_password()
+
+
 
 # ── 嘗試 import 選用套件 ──────────────────────────
 try:
@@ -103,16 +142,36 @@ def pct_color(v):
     if v < 0:   return "down", f"▼ {abs(v):.2f}%"
     return "flat", f"─ {v:.2f}%"
 
-@st.cache_data(ttl=300)  # 5 分鐘快取
+@st.cache_data(ttl=600)
 def get_twse_all():
-    """取得上市所有股票當日行情"""
-    try:
-        url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if r.status_code == 200:
-            return pd.DataFrame(r.json())
-    except Exception:
-        pass
+    """取得上市所有股票當日行情（多備援 URL）"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+        "Referer": "https://www.twse.com.tw/",
+    }
+    # 備援 URL 清單，依序嘗試
+    urls = [
+        "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+        "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code == 200 and r.text.strip():
+                data = r.json()
+                # 第一個 URL 直接回傳 list
+                if isinstance(data, list):
+                    return pd.DataFrame(data)
+                # 第二個 URL 回傳 {"data": [...], "fields": [...]}
+                if isinstance(data, dict) and "data" in data:
+                    fields = data.get("fields", [])
+                    rows   = data.get("data", [])
+                    if fields and rows:
+                        return pd.DataFrame(rows, columns=fields)
+        except Exception:
+            continue
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -488,49 +547,87 @@ elif module == "🔍 選股篩選":
         ["上市（TWSE）", "上櫃（TPEx）"], default=["上市（TWSE）"], key="f_mkt")
 
     if st.button("🚀 開始篩選", key="btn_screen", use_container_width=False):
-        with st.spinner("下載市場資料並進行篩選..."):
+        with st.spinner("下載市場資料並進行篩選（約 15~30 秒）..."):
             results = []
 
-            # 取上市資料
+            # ── 主要方式：TWSE OpenAPI ──
             if "上市（TWSE）" in market_filter:
                 df_all = get_twse_all()
                 if not df_all.empty:
-                    # TWSE 欄位標準化
                     col_map = {}
                     for c in df_all.columns:
-                        if "代號" in c or "Code" in c.title():   col_map[c] = "Code"
-                        if "名稱" in c or "Name" in c.title():   col_map[c] = "Name"
-                        if "收盤" in c or "Close" in c.title():  col_map[c] = "Close"
-                        if "漲跌" in c or "Change" in c.title(): col_map[c] = "Change"
-                        if "成交" in c and "量" in c:             col_map[c] = "Volume"
+                        if any(k in c for k in ["代號","Code","SecuritiesCode"]): col_map[c] = "Code"
+                        if any(k in c for k in ["名稱","Name","CompanyName"]):    col_map[c] = "Name"
+                        if any(k in c for k in ["收盤","Close","ClosingPrice"]):  col_map[c] = "Close"
+                        if any(k in c for k in ["漲跌","Change"]):                col_map[c] = "Change"
+                        if "成交" in c and "量" in c:                              col_map[c] = "Volume"
                     df_all = df_all.rename(columns=col_map)
-
                     for col in ["Close", "Change", "Volume"]:
                         if col in df_all.columns:
                             df_all[col] = pd.to_numeric(
-                                df_all[col].astype(str).str.replace(",", ""),
-                                errors="coerce")
-
-                    for _, row in df_all.head(50).iterrows():
+                                df_all[col].astype(str).str.replace(",", ""), errors="coerce")
+                    for _, row in df_all.iterrows():
                         try:
                             code = str(row.get("Code", "")).strip()
                             name = str(row.get("Name", "")).strip()
                             close= float(row.get("Close", 0) or 0)
                             chg  = float(row.get("Change", 0) or 0)
                             chg_pct_v = (chg / (close - chg) * 100) if (close - chg) > 0 else 0
-                            results.append({
-                                "代號": code, "名稱": name, "市場": "上市",
-                                "收盤價": close,
-                                "漲跌幅(%)": round(chg_pct_v, 2),
-                                "狀態": "需詳細分析"
-                            })
+                            if code and close > 0:
+                                results.append({
+                                    "代號": code, "名稱": name, "市場": "上市",
+                                    "收盤價": close,
+                                    "漲跌幅(%)": round(chg_pct_v, 2),
+                                })
                         except Exception:
                             continue
 
+            # ── 備援方式：yfinance 抓常用股票（TWSE 被擋時使用）──
+            if not results and HAS_YF:
+                st.info("TWSE API 暫時無法連線，改用備援模式載入常用股票...")
+                popular = [
+                    ("2330","台積電"),("2317","鴻海"),("2454","聯發科"),
+                    ("2382","廣達"),("2308","台達電"),("2303","聯電"),
+                    ("3711","日月光投控"),("2002","中鋼"),("1301","台塑"),
+                    ("2881","富邦金"),("2882","國泰金"),("2886","兆豐金"),
+                    ("0050","元大台灣50"),("0056","元大高股息"),
+                    ("00878","國泰永續高股息"),("00919","群益台灣精選高息"),
+                ]
+                progress = st.progress(0)
+                for i, (code, name) in enumerate(popular):
+                    progress.progress((i+1)/len(popular))
+                    try:
+                        df_h = get_stock_history(f"{code}.TW", "5d")
+                        if not df_h.empty:
+                            last = df_h.iloc[-1]
+                            prev = df_h.iloc[-2] if len(df_h) > 1 else last
+                            close = float(last["Close"])
+                            chg_pct_v = ((close - float(prev["Close"])) /
+                                        float(prev["Close"]) * 100) if float(prev["Close"]) > 0 else 0
+                            results.append({
+                                "代號": code, "名稱": name, "市場": "上市",
+                                "收盤價": round(close, 1),
+                                "漲跌幅(%)": round(chg_pct_v, 2),
+                            })
+                    except Exception:
+                        continue
+                progress.empty()
+
             if results:
                 df_result = pd.DataFrame(results)
+
+                # ── 套用技術面篩選（需有歷史資料）──
+                # 注意：RSI/MA 篩選在備援模式下略過（需要歷史資料）
+                if filter_ma_cross or filter_vol_surge:
+                    st.caption("⚠️ 均線金叉與量增篩選需要歷史資料，目前顯示所有結果，請手動確認")
+
+                # ── 套用基本面篩選（以漲跌幅為代理變數）──
+                if pe_max < 50:
+                    st.caption(f"本益比篩選需財報 API，目前顯示收盤價 < NT${pe_max*30:.0f} 的股票作為參考")
+                    df_result = df_result[df_result["收盤價"] < pe_max * 30]
+
                 section_card("📋 篩選結果", "#16a34a")
-                st.success(f"✅ 找到 {len(df_result)} 檔符合條件的股票（示範模式：僅顯示前 50 筆）")
+                st.success(f"✅ 找到 {len(df_result)} 檔股票")
                 st.dataframe(df_result, use_container_width=True, hide_index=True)
 
                 # 加入觀察清單
@@ -558,7 +655,16 @@ RSI 超賣閾值 {filter_rsi_low}、均線金叉：{'是' if filter_ma_cross els
                     else:
                         st.info("請設定 ANTHROPIC_API_KEY 以啟用 AI 分析")
             else:
-                st.warning("無法取得市場資料，請確認網路連線後再試")
+                st.warning("""
+⚠️ TWSE API 及備援模式均無法取得資料。
+
+可能原因：
+1. **非交易日**（週末或國定假日）— TWSE 收盤後約 30 分鐘才更新資料
+2. **Streamlit Cloud IP 被限流** — TWSE 對雲端伺服器 IP 有流量限制
+3. **網路連線問題** — 稍後再試
+
+建議：直接使用「即時行情」模組查詢個別股票，不受此限制影響。
+""")
 
     # ── 觀察清單 ──
     if st.session_state["watchlist"]:
