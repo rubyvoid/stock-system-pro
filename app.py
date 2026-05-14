@@ -334,9 +334,10 @@ def calc_bollinger(df: pd.DataFrame, period=20, std=2) -> pd.DataFrame:
 # Session State 初始化
 # ══════════════════════════════════════════════════════
 for k, v in [
-    ("portfolio",    []),   # 投資組合持股清單
-    ("watchlist",    []),   # 觀察清單
-    ("module",       "📈 即時行情"),
+    ("portfolio",      []),    # 投資組合持股清單
+    ("watchlist",      []),    # 觀察清單
+    ("module",         "📈 即時行情"),
+    ("screen_results", None),  # 選股篩選結果（按鈕後保留）
 ]:
     if k not in st.session_state:
         st.session_state[k] = v
@@ -683,31 +684,33 @@ elif module == "🔍 選股篩選":
 
             if results:
                 df_result = pd.DataFrame(results)
-
-                # ── 套用技術面篩選（需有歷史資料）──
-                # 注意：RSI/MA 篩選在備援模式下略過（需要歷史資料）
-                if filter_ma_cross or filter_vol_surge:
-                    st.caption("⚠️ 均線金叉與量增篩選需要歷史資料，目前顯示所有結果，請手動確認")
-
-                # ── 套用基本面篩選（以漲跌幅為代理變數）──
                 if pe_max < 50:
-                    st.caption(f"本益比篩選需財報 API，目前顯示收盤價 < NT${pe_max*30:.0f} 的股票作為參考")
                     df_result = df_result[df_result["收盤價"] < pe_max * 30]
+                # 存入 session_state，按其他按鈕 rerun 後仍保留
+                st.session_state["screen_results"] = df_result.to_dict("records")
 
-                section_card("📋 篩選結果", "#16a34a")
-                st.success(f"✅ 找到 {len(df_result)} 檔股票")
-                st.dataframe(df_result, use_container_width=True, hide_index=True)
+        # ── 顯示篩選結果（從 session_state 讀取，rerun 後不消失）──
+        if st.session_state.get("screen_results"):
+            df_result = pd.DataFrame(st.session_state["screen_results"])
+            if filter_ma_cross or filter_vol_surge:
+                st.caption("⚠️ 均線金叉與量增篩選需要歷史資料，目前顯示所有結果，請手動確認")
+            if pe_max < 50:
+                st.caption(f"本益比篩選參考：顯示收盤價 < NT${pe_max*30:.0f} 的股票")
 
-                # 加入觀察清單
-                selected = st.multiselect("選擇股票加入觀察清單",
-                    df_result["代號"].tolist(), key="sel_watch")
-                if st.button("加入觀察清單", key="btn_add_watch"):
-                    st.session_state["watchlist"] = list(
-                        set(st.session_state["watchlist"] + selected))
-                    st.success(f"已加入 {len(selected)} 檔到觀察清單")
+            section_card("📋 篩選結果", "#16a34a")
+            st.success(f"✅ 找到 {len(df_result)} 檔股票")
+            st.dataframe(df_result, use_container_width=True, hide_index=True)
 
-                # AI 分析
-                if st.button("📊 分析篩選結果", key="btn_ai_screen"):
+            # 加入觀察清單
+            selected = st.multiselect("選擇股票加入觀察清單",
+                df_result["代號"].tolist(), key="sel_watch")
+            if st.button("加入觀察清單", key="btn_add_watch"):
+                st.session_state["watchlist"] = list(
+                    set(st.session_state["watchlist"] + selected))
+                st.success(f"✅ 已加入 {len(selected)} 檔到觀察清單")
+
+            # 分析篩選結果（獨立按鈕，不在加入觀察清單的 if 裡）
+            if st.button("📊 分析篩選結果", key="btn_ai_screen"):
                     top5 = df_result.head(5)['名稱'].tolist() if len(df_result) >= 5 else df_result['名稱'].tolist()
                     conds = []
                     if filter_ma_cross:    conds.append("均線金叉（MA5>MA20）")
