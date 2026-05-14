@@ -489,13 +489,17 @@ if module == "📈 即時行情":
         if st.button("產生 AI 技術分析報告", key="btn_ai_quote"):
             rsi_val  = df_hist["RSI"].iloc[-1] if "RSI" in df_hist.columns else None
             macd_val = df_hist["MACD"].iloc[-1] if "MACD" in df_hist.columns else None
+            ma20_str  = f"{df_hist['MA20'].iloc[-1]:.1f}"  if 'MA20' in df_hist.columns else 'N/A'
+            ma60_str  = f"{df_hist['MA60'].iloc[-1]:.1f}"  if 'MA60' in df_hist.columns else 'N/A'
+            rsi_str   = f"{rsi_val:.1f}"  if rsi_val  is not None and not (isinstance(rsi_val, float) and rsi_val != rsi_val) else 'N/A'
+            macd_str  = f"{macd_val:.3f}" if macd_val is not None and not (isinstance(macd_val, float) and macd_val != macd_val) else 'N/A'
             prompt = f"""請分析台股 {ticker_full} 的技術面：
 
 收盤價：{last['Close']:.1f}，漲跌幅：{chg_pct:.2f}%
-MA20：{df_hist['MA20'].iloc[-1]:.1f if 'MA20' in df_hist.columns else 'N/A'}
-MA60：{df_hist['MA60'].iloc[-1]:.1f if 'MA60' in df_hist.columns else 'N/A'}
-RSI(14)：{rsi_val:.1f if rsi_val else 'N/A'}
-MACD：{macd_val:.3f if macd_val else 'N/A'}
+MA20：{ma20_str}
+MA60：{ma60_str}
+RSI(14)：{rsi_str}
+MACD：{macd_str}
 
 請提供：
 1. 短期趨勢判斷（多/空/中性）
@@ -895,19 +899,24 @@ elif module == "🤖 AI 選股":
                     df_hist = calc_rsi(df_hist)
                     last = df_hist.iloc[-1]
 
+                    ma20_s = f"{df_hist['MA20'].iloc[-1]:.1f}" if 'MA20' in df_hist.columns else 'N/A'
+                    ma60_s = f"{df_hist['MA60'].iloc[-1]:.1f}" if 'MA60' in df_hist.columns else 'N/A'
+                    rsi_s  = f"{df_hist['RSI'].iloc[-1]:.1f}"  if 'RSI'  in df_hist.columns else 'N/A'
+                    mktcap = info.get('marketCap', 0)
+                    mktcap_s = f"{mktcap/1e8:.0f}" if mktcap else 'N/A'
                     prompt = f"""請對台股 {ticker_full} 進行深度分析：
 
 【基本資訊】
 股名：{info.get('longName', ai_ticker)}
 產業：{info.get('industry', '未知')}
-市值：{info.get('marketCap', 0)/1e8:.0f} 億
+市值：{mktcap_s} 億
 
 【近期價格】
 收盤：{last['Close']:.1f}
 52週高/低：{info.get('fiftyTwoWeekHigh','N/A')} / {info.get('fiftyTwoWeekLow','N/A')}
-MA20：{df_hist['MA20'].iloc[-1]:.1f if 'MA20' in df_hist.columns else 'N/A'}
-MA60：{df_hist['MA60'].iloc[-1]:.1f if 'MA60' in df_hist.columns else 'N/A'}
-RSI(14)：{df_hist['RSI'].iloc[-1]:.1f if 'RSI' in df_hist.columns else 'N/A'}
+MA20：{ma20_s}
+MA60：{ma60_s}
+RSI(14)：{rsi_s}
 
 【基本面】
 本益比：{info.get('trailingPE', 'N/A')}
