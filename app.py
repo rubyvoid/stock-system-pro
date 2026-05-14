@@ -176,15 +176,45 @@ def get_twse_all():
 
 @st.cache_data(ttl=300)
 def get_twse_legal_person():
-    """取得三大法人買賣超"""
-    try:
-        url = "https://openapi.twse.com.tw/v1/fund/T86"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if r.status_code == 200:
-            return pd.DataFrame(r.json())
-    except Exception:
-        pass
+    """取得三大法人買賣超（TWSE API + yfinance 備援）"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    # 嘗試多個 TWSE 端點
+    urls = [
+        "https://openapi.twse.com.tw/v1/fund/T86",
+        "https://www.twse.com.tw/rwd/zh/fund/T86?response=json&selectType=ALL",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            if r.status_code == 200 and r.text.strip():
+                data = r.json()
+                if isinstance(data, list) and data:
+                    return pd.DataFrame(data)
+                if isinstance(data, dict) and "data" in data:
+                    fields = data.get("fields", [])
+                    rows   = data.get("data", [])
+                    if rows:
+                        return pd.DataFrame(rows, columns=fields) if fields else pd.DataFrame(rows)
+        except Exception:
+            continue
     return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_legal_yfinance(ticker_tw: str) -> dict:
+    """用 yfinance 取得機構持股資訊作為法人資料備援"""
+    if not HAS_YF:
+        return {}
+    try:
+        info = yf.Ticker(ticker_tw).info
+        return {
+            "機構持股比例": f"{info.get('heldPercentInstitutions', 0)*100:.1f}%",
+            "內部人持股比例": f"{info.get('heldPercentInsiders', 0)*100:.1f}%",
+            "短期賣空比例": f"{info.get('shortRatio', 0):.2f}",
+            "52週高點": f"{info.get('fiftyTwoWeekHigh', 'N/A')}",
+            "52週低點": f"{info.get('fiftyTwoWeekLow', 'N/A')}",
+        }
+    except Exception:
+        return {}
 
 @st.cache_data(ttl=300)
 def get_tpex_all():
@@ -492,31 +522,53 @@ if module == "📈 即時行情":
 
         # ── AI 分析 ──
         section_card("🤖 AI 技術面解讀")
-        if st.button("產生 AI 技術分析報告", key="btn_ai_quote"):
+        if st.button("產生技術分析報告", key="btn_ai_quote"):
             rsi_val  = df_hist["RSI"].iloc[-1] if "RSI" in df_hist.columns else None
             macd_val = df_hist["MACD"].iloc[-1] if "MACD" in df_hist.columns else None
-            ma20_str  = f"{df_hist['MA20'].iloc[-1]:.1f}"  if 'MA20' in df_hist.columns else 'N/A'
-            ma60_str  = f"{df_hist['MA60'].iloc[-1]:.1f}"  if 'MA60' in df_hist.columns else 'N/A'
-            rsi_str   = f"{rsi_val:.1f}"  if rsi_val  is not None and not (isinstance(rsi_val, float) and rsi_val != rsi_val) else 'N/A'
-            macd_str  = f"{macd_val:.3f}" if macd_val is not None and not (isinstance(macd_val, float) and macd_val != macd_val) else 'N/A'
-            prompt = f"""請分析台股 {ticker_full} 的技術面：
+            ma20_v = df_hist['MA20'].iloc[-1] if 'MA20' in df_hist.columns else None
+            ma60_v = df_hist['MA60'].iloc[-1] if 'MA60' in df_hist.columns else None
+            close  = float(last['Close'])
 
-收盤價：{last['Close']:.1f}，漲跌幅：{chg_pct:.2f}%
-MA20：{ma20_str}
-MA60：{ma60_str}
-RSI(14)：{rsi_str}
-MACD：{macd_str}
+            # ── 規則引擎自動產生技術分析報告 ──
+            trend = "中性"
+            signals = []
+            if rsi_val is not None and not (rsi_val != rsi_val):
+                if rsi_val < 30:   signals.append(f"RSI({rsi_val:.1f}) 超賣，留意反彈機會")
+                elif rsi_val > 70: signals.append(f"RSI({rsi_val:.1f}) 超買，注意短線回壓")
+                else:              signals.append(f"RSI({rsi_val:.1f}) 中性區間")
+            if ma20_v and ma60_v:
+                if close > ma20_v > ma60_v:
+                    trend = "多頭"; signals.append(f"均線多頭排列（收盤 {close:.1f} > MA20 {ma20_v:.1f} > MA60 {ma60_v:.1f}）")
+                elif close < ma20_v < ma60_v:
+                    trend = "空頭"; signals.append(f"均線空頭排列（收盤 {close:.1f} < MA20 {ma20_v:.1f} < MA60 {ma60_v:.1f}）")
+                else:
+                    signals.append(f"均線糾結（MA20 {ma20_v:.1f}，MA60 {ma60_v:.1f}），方向待確認")
+            if macd_val is not None and not (macd_val != macd_val):
+                macd_sig = df_hist['MACD_Signal'].iloc[-1] if 'MACD_Signal' in df_hist.columns else 0
+                if macd_val > macd_sig: signals.append(f"MACD 金叉（{macd_val:.3f} > Signal），動能偏多")
+                else:                   signals.append(f"MACD 死叉（{macd_val:.3f} < Signal），動能偏弱")
 
-請提供：
-1. 短期趨勢判斷（多/空/中性）
-2. 關鍵支撐與壓力位
-3. 操作建議（注意：僅供參考，非投資建議）"""
-            with st.spinner("AI 分析中..."):
-                ai_result = call_claude(prompt)
-            if ai_result:
-                render_ai(ai_result, f"AI 技術分析 · {ticker_full}")
-            else:
-                st.info("請在 Streamlit Secrets 設定 GEMINI_API_KEY 以啟用 AI 分析（Google 免費）")
+            support  = round(close * 0.95, 1)
+            pressure = round(close * 1.05, 1)
+            if ma20_v: support  = round(min(support, ma20_v * 0.98), 1)
+            if ma60_v: pressure = round(max(pressure, ma60_v * 1.02), 1)
+
+            report = f"""【{ticker_full} 技術分析報告】
+
+一、趨勢研判：{trend}
+收盤價 {close:.1f}，漲跌幅 {chg_pct:+.2f}%
+
+二、技術訊號
+{''.join(f"• {s}{chr(10)}" for s in signals)}
+三、支撐與壓力
+• 近期支撐：{support}（±5% 區間）
+• 近期壓力：{pressure}（±5% 區間）
+
+四、操作建議（僅供參考）
+{'• 趨勢偏多，可關注回檔支撐買點' if trend=='多頭' else '• 趨勢偏空，建議觀望或設停損' if trend=='空頭' else '• 方向未明，建議觀望等待突破訊號'}
+
+⚠️ 本報告由規則引擎自動產生，不構成投資建議。"""
+            render_ai(report, f"技術分析報告 · {ticker_full}")
 
 # ══════════════════════════════════════════════════════
 # 模組二：選股篩選器
@@ -655,21 +707,35 @@ elif module == "🔍 選股篩選":
                     st.success(f"已加入 {len(selected)} 檔到觀察清單")
 
                 # AI 分析
-                if st.button("🤖 AI 分析篩選結果", key="btn_ai_screen"):
-                    prompt = f"""我設定以下選股條件：
-RSI 超賣閾值 {filter_rsi_low}、均線金叉：{'是' if filter_ma_cross else '否'}
-本益比 ≤ {pe_max}、殖利率 ≥ {dy_min}%、ROE ≥ {roe_min}%
-外資連續買超：{'是' if filter_foreign_buy else '否'}
+                if st.button("📊 分析篩選結果", key="btn_ai_screen"):
+                    top5 = df_result.head(5)['名稱'].tolist() if len(df_result) >= 5 else df_result['名稱'].tolist()
+                    conds = []
+                    if filter_ma_cross:    conds.append("均線金叉（MA5>MA20）")
+                    if filter_vol_surge:   conds.append("成交量突破")
+                    if filter_foreign_buy: conds.append("外資連買3日")
+                    if pe_max < 50:        conds.append(f"本益比≤{pe_max}")
+                    if dy_min > 0:         conds.append(f"殖利率≥{dy_min}%")
+                    strategy = "、".join(conds) if conds else "無特定條件"
+                    quality = "嚴格" if len(conds) >= 3 else "中等" if len(conds) >= 2 else "寬鬆"
+                    report = f"""【選股策略分析報告】
 
-篩選出 {len(df_result)} 檔個股，前5名：{', '.join(df_result.head(5)['名稱'].tolist())}
+一、篩選條件（{quality}）
+{strategy}
 
-請評估這個選股策略的合理性，以及在當前市場環境下的適用性。"""
-                    with st.spinner("AI 分析中..."):
-                        ai_res = call_claude(prompt)
-                    if ai_res:
-                        render_ai(ai_res, "AI 選股策略分析")
-                    else:
-                        st.info("請設定 GEMINI_API_KEY 以啟用 AI 分析（Google 免費）")
+二、篩選結果
+共找到 {len(df_result)} 檔符合條件的股票
+代表性個股：{', '.join(top5)}
+
+三、策略評估
+{'• 多因子篩選，條件嚴格，品質較高，但數量較少' if quality=='嚴格' else '• 條件中等，建議再加入法人買超條件提升準確率' if quality=='中等' else '• 條件較寬鬆，個股數量多，建議縮小篩選範圍'}
+{'• 含外資買超，法人認同度高，訊號可信度提升' if filter_foreign_buy else '• 建議加入法人動向條件提高準確率'}
+{'• 均線金叉確認趨勢，進場時機較佳' if filter_ma_cross else ''}
+
+四、注意事項
+• 篩選結果為歷史資料統計，不保證未來表現
+• 建議結合個股基本面研究再做最終決策
+⚠️ 本報告由規則引擎自動產生，不構成投資建議"""
+                    render_ai(report, "選股策略分析報告")
             else:
                 st.warning("""
 ⚠️ TWSE API 及備援模式均無法取得資料。
@@ -839,7 +905,16 @@ elif module == "🏦 籌碼分析":
                         st.dataframe(df_legal.head(20), use_container_width=True,
                                      hide_index=True)
             else:
-                st.warning("⚠️ 無法取得法人資料，請確認網路連線")
+                st.warning("⚠️ TWSE 法人 API 暫時無法連線（Streamlit Cloud IP 限制）")
+                st.info("📊 改用 Yahoo Finance 機構持股資料作為備援")
+                legal_yf = get_legal_yfinance(f"{chip_ticker}{suffix}")
+                if legal_yf:
+                    df_legal_yf = pd.DataFrame([
+                        {"項目": k, "數值": v} for k,v in legal_yf.items()
+                    ])
+                    st.dataframe(df_legal_yf, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("備援資料也無法取得，請稍後再試")
 
             # 歷史股價 + 法人買賣超趨勢
             df_hist = get_stock_history(f"{chip_ticker}{suffix}", "3mo")
@@ -869,7 +944,17 @@ elif module == "🏦 籌碼分析":
                              hide_index=True)
                 st.caption(f"共 {len(df_legal)} 筆資料，顯示前 30 筆")
             else:
-                st.warning("無法取得資料")
+                st.warning("⚠️ TWSE 法人 API 暫時無法連線，以下顯示主要個股機構持股概況")
+                popular = ["2330.TW","2317.TW","2454.TW","2382.TW","0050.TW","00878.TW"]
+                rows_yf = []
+                for t in popular:
+                    d = get_legal_yfinance(t)
+                    if d:
+                        rows_yf.append({"代號": t.replace(".TW",""), **d})
+                if rows_yf:
+                    st.dataframe(pd.DataFrame(rows_yf), use_container_width=True, hide_index=True)
+                else:
+                    st.warning("備援資料無法取得，請稍後再試")
 
 # ══════════════════════════════════════════════════════
 # 模組五：AI 選股建議
