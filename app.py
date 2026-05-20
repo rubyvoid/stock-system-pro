@@ -1089,8 +1089,11 @@ elif module == "🤖 AI 選股":
                 from sklearn.metrics import mean_absolute_percentage_error
 
                 lookback = 30
-                feat_cols = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
-                             'BB_Width','Momentum','Volatility']
+                feat_cols = ['MA5','MA20','MA60','MA5_slope','MA20_slope','Price_MA20','MA5_MA20',
+                             'RSI','RSI_slope','MACD','MACD_Signal','MACD_Hist','MACD_Cross',
+                             'BB_Width','BB_Pos','Vol_Ratio','Price_Vol',
+                             'Momentum1','Momentum3','Momentum5','Momentum10',
+                             'Volatility','High_Low','ADX_proxy']
 
                 # ── 用當前真實價格做基準，預測漲跌幅再換算絕對價格 ──
                 current_price_ref = _use_price  # 已同步校正
