@@ -1150,22 +1150,22 @@ elif module == "🤖 AI 選股":
             # ── 判讀說明 ──
             rf_dir     = 1 if future_prices[0] > current_price_ref else 0
             agree      = (xgb_dir == rf_dir)
-            if xgb_acc >= 0.60 and xgb_conf >= 65 and agree:
+            if agree and xgb_acc >= 0.57 and xgb_conf >= 60:
                 signal_level = "high"
-                signal_label = "🟢 高可信度"
-                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），XGBoost 準確率 {xgb_acc:.1%}、信心度 {xgb_conf:.0f}%，訊號較可靠"
-            elif agree and xgb_conf >= 55:
+                signal_label = "🟢 訊號明確"
+                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），XGBoost 準確率 {xgb_acc:.1%}、信心度 {xgb_conf:.0f}%，可作為參考依據"
+            elif agree and xgb_conf >= 52:
                 signal_level = "mid"
-                signal_label = "🟡 中等可信度"
-                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），但信心度或準確率尚未達高標，可參考但需留意"
+                signal_label = "🟡 訊號偏向{'漲' if xgb_dir else '跌'}"
+                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），信心度 {xgb_conf:.0f}%，有方向性但強度普通，建議搭配其他指標確認"
             elif not agree:
                 signal_level = "low"
                 signal_label = "🔴 訊號分歧"
-                signal_desc  = f"XGBoost 看{'漲' if xgb_dir else '跌'}，RF 看{'漲' if rf_dir else '跌'}，兩模型意見相反，市場方向不明朗，建議觀望"
+                signal_desc  = f"XGBoost 看{'漲' if xgb_dir else '跌'}（信心 {xgb_conf:.0f}%），RF 看{'漲' if rf_dir else '跌'}，兩模型意見相反，市場方向不明朗，建議觀望"
             else:
                 signal_level = "low"
-                signal_label = "🟡 信心偏弱"
-                signal_desc  = f"方向一致但信心度 {xgb_conf:.0f}% 偏低（低於 55%），訊號參考價值有限"
+                signal_label = "🟡 信心不足"
+                signal_desc  = f"方向一致但信心度 {xgb_conf:.0f}% 低於 52%，模型近乎無法判斷方向，不建議單獨依賴"
 
             signal_colors = {"high": "#dcfce7", "mid": "#fef9c3", "low": "#fee2e2"}
             signal_borders = {"high": "#16a34a", "mid": "#ca8a04", "low": "#dc2626"}
