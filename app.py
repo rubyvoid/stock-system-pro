@@ -702,12 +702,21 @@ elif module == "🔍 選股篩選":
             st.dataframe(df_result, use_container_width=True, hide_index=True)
 
             # 加入觀察清單
+            if "sel_watch_buf" not in st.session_state:
+                st.session_state["sel_watch_buf"] = []
             selected = st.multiselect("選擇股票加入觀察清單",
-                df_result["代號"].tolist(), key="sel_watch")
+                df_result["代號"].tolist(),
+                default=st.session_state["sel_watch_buf"],
+                key="sel_watch",
+                on_change=lambda: st.session_state.update(
+                    sel_watch_buf=st.session_state["sel_watch"]
+                ))
             if st.button("加入觀察清單", key="btn_add_watch"):
+                added = st.session_state["sel_watch_buf"]
                 st.session_state["watchlist"] = list(
-                    set(st.session_state["watchlist"] + selected))
-                st.success(f"✅ 已加入 {len(selected)} 檔到觀察清單")
+                    set(st.session_state["watchlist"] + added))
+                st.session_state["sel_watch_buf"] = []
+                st.success(f"✅ 已加入 {len(added)} 檔到觀察清單")
 
             # 分析篩選結果（獨立按鈕，不在加入觀察清單的 if 裡）
             if st.button("📊 分析篩選結果", key="btn_ai_screen"):
