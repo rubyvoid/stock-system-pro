@@ -689,40 +689,40 @@ elif module == "🔍 選股篩選":
                 # 存入 session_state，按其他按鈕 rerun 後仍保留
                 st.session_state["screen_results"] = df_result.to_dict("records")
 
-        # ── 顯示篩選結果（從 session_state 讀取，rerun 後不消失）──
-        if st.session_state.get("screen_results"):
-            df_result = pd.DataFrame(st.session_state["screen_results"])
-            if filter_ma_cross or filter_vol_surge:
-                st.caption("⚠️ 均線金叉與量增篩選需要歷史資料，目前顯示所有結果，請手動確認")
-            if pe_max < 50:
-                st.caption(f"本益比篩選參考：顯示收盤價 < NT${pe_max*30:.0f} 的股票")
+    # ── 顯示篩選結果（從 session_state 讀取，rerun 後不消失）──
+    if st.session_state.get("screen_results"):
+        df_result = pd.DataFrame(st.session_state["screen_results"])
+        if filter_ma_cross or filter_vol_surge:
+            st.caption("⚠️ 均線金叉與量增篩選需要歷史資料，目前顯示所有結果，請手動確認")
+        if pe_max < 50:
+            st.caption(f"本益比篩選參考：顯示收盤價 < NT${pe_max*30:.0f} 的股票")
 
-            section_card("📋 篩選結果", "#16a34a")
-            st.success(f"✅ 找到 {len(df_result)} 檔股票")
-            st.dataframe(df_result, use_container_width=True, hide_index=True)
+        section_card("📋 篩選結果", "#16a34a")
+        st.success(f"✅ 找到 {len(df_result)} 檔股票")
+        st.dataframe(df_result, use_container_width=True, hide_index=True)
 
-            # 加入觀察清單
-            selected = st.multiselect("選擇股票加入觀察清單",
-                df_result["代號"].tolist(),
-                key="sel_watch")
-            if st.button("加入觀察清單", key="btn_add_watch"):
-                to_add = st.session_state.get("sel_watch", [])
-                st.session_state["watchlist"] = list(
-                    set(st.session_state["watchlist"] + to_add))
-                st.success(f"✅ 已加入 {len(to_add)} 檔到觀察清單")
+        # 加入觀察清單
+        selected = st.multiselect("選擇股票加入觀察清單",
+            df_result["代號"].tolist(),
+            key="sel_watch")
+        if st.button("加入觀察清單", key="btn_add_watch"):
+            to_add = st.session_state.get("sel_watch", [])
+            st.session_state["watchlist"] = list(
+                set(st.session_state["watchlist"] + to_add))
+            st.success(f"✅ 已加入 {len(to_add)} 檔到觀察清單")
 
-            # 分析篩選結果（獨立按鈕，不在加入觀察清單的 if 裡）
-            if st.button("📊 分析篩選結果", key="btn_ai_screen"):
-                    top5 = df_result.head(5)['名稱'].tolist() if len(df_result) >= 5 else df_result['名稱'].tolist()
-                    conds = []
-                    if filter_ma_cross:    conds.append("均線金叉（MA5>MA20）")
-                    if filter_vol_surge:   conds.append("成交量突破")
-                    if filter_foreign_buy: conds.append("外資連買3日")
-                    if pe_max < 50:        conds.append(f"本益比≤{pe_max}")
-                    if dy_min > 0:         conds.append(f"殖利率≥{dy_min}%")
-                    strategy = "、".join(conds) if conds else "無特定條件"
-                    quality = "嚴格" if len(conds) >= 3 else "中等" if len(conds) >= 2 else "寬鬆"
-                    report = f"""【選股策略分析報告】
+        # 分析篩選結果（獨立按鈕，不在加入觀察清單的 if 裡）
+        if st.button("📊 分析篩選結果", key="btn_ai_screen"):
+                top5 = df_result.head(5)['名稱'].tolist() if len(df_result) >= 5 else df_result['名稱'].tolist()
+                conds = []
+                if filter_ma_cross:    conds.append("均線金叉（MA5>MA20）")
+                if filter_vol_surge:   conds.append("成交量突破")
+                if filter_foreign_buy: conds.append("外資連買3日")
+                if pe_max < 50:        conds.append(f"本益比≤{pe_max}")
+                if dy_min > 0:         conds.append(f"殖利率≥{dy_min}%")
+                strategy = "、".join(conds) if conds else "無特定條件"
+                quality = "嚴格" if len(conds) >= 3 else "中等" if len(conds) >= 2 else "寬鬆"
+                report = f"""【選股策略分析報告】
 
 一、篩選條件（{quality}）
 {strategy}
@@ -740,9 +740,9 @@ elif module == "🔍 選股篩選":
 • 篩選結果為歷史資料統計，不保證未來表現
 • 建議結合個股基本面研究再做最終決策
 ⚠️ 本報告由規則引擎自動產生，不構成投資建議"""
-                    render_ai(report, "選股策略分析報告")
-            else:
-                st.warning("""
+                render_ai(report, "選股策略分析報告")
+        else:
+            st.warning("""
 ⚠️ TWSE API 及備援模式均無法取得資料。
 
 可能原因：
