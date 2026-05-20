@@ -1144,22 +1144,67 @@ elif module == "🤖 AI 選股":
             # ══ 結果展示 ══
             section_card("📊 雙模型預測結果", "#1d4ed8")
 
-            # KPI 卡片
             xgb_signal = "漲" if xgb_dir == 1 else "跌"
             xgb_conf   = xgb_prob[xgb_dir] * 100
-            consensus  = "強烈" if xgb_conf > 70 else "中等" if xgb_conf > 55 else "偏弱"
 
+            # ── 判讀說明 ──
+            rf_dir     = 1 if future_prices[0] > current_price_ref else 0
+            agree      = (xgb_dir == rf_dir)
+            if xgb_acc >= 0.60 and xgb_conf >= 65 and agree:
+                signal_level = "high"
+                signal_label = "🟢 高可信度"
+                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），XGBoost 準確率 {xgb_acc:.1%}、信心度 {xgb_conf:.0f}%，訊號較可靠"
+            elif agree and xgb_conf >= 55:
+                signal_level = "mid"
+                signal_label = "🟡 中等可信度"
+                signal_desc  = f"兩模型方向一致（均看{'漲' if xgb_dir else '跌'}），但信心度或準確率尚未達高標，可參考但需留意"
+            elif not agree:
+                signal_level = "low"
+                signal_label = "🔴 訊號分歧"
+                signal_desc  = f"XGBoost 看{'漲' if xgb_dir else '跌'}，RF 看{'漲' if rf_dir else '跌'}，兩模型意見相反，市場方向不明朗，建議觀望"
+            else:
+                signal_level = "low"
+                signal_label = "🟡 信心偏弱"
+                signal_desc  = f"方向一致但信心度 {xgb_conf:.0f}% 偏低（低於 55%），訊號參考價值有限"
+
+            signal_colors = {"high": "#dcfce7", "mid": "#fef9c3", "low": "#fee2e2"}
+            signal_borders = {"high": "#16a34a", "mid": "#ca8a04", "low": "#dc2626"}
+            st.markdown(f"""
+            <div style="background:{signal_colors[signal_level]};border:1.5px solid {signal_borders[signal_level]};
+                        border-radius:12px;padding:14px 20px;margin-bottom:16px;">
+                <div style="font-size:1rem;font-weight:700;color:{signal_borders[signal_level]};margin-bottom:4px;">
+                    {signal_label}
+                </div>
+                <div style="font-size:0.88rem;color:#374151;">{signal_desc}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ── KPI 卡片 + 判讀說明 ──
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("XGBoost 方向預測", f"明日{'▲' if xgb_dir else '▼'} {xgb_signal}",
                       delta=f"信心度 {xgb_conf:.1f}%",
                       delta_color="normal" if xgb_dir else "inverse")
             k2.metric("XGBoost 回測準確率", f"{xgb_acc:.1%}",
-                      delta="高於業界平均 55%" if xgb_acc > 0.55 else "接近業界水準")
-            k3.metric("RF 預測誤差", f"{lstm_mape:.1%}",
-                      delta="低誤差" if lstm_mape < 0.03 else "中等誤差",
-                      delta_color="normal" if lstm_mape < 0.03 else "off")
-            k4.metric(f"訊號共識強度", consensus,
-                      delta=f"XGBoost 信心 {xgb_conf:.0f}%")
+                      delta="✅ 高（>60%）" if xgb_acc >= 0.60 else "⚠️ 中（55-60%）" if xgb_acc >= 0.55 else "❌ 低（<55%，接近隨機）",
+                      delta_color="normal" if xgb_acc >= 0.60 else "off" if xgb_acc >= 0.55 else "inverse")
+            k3.metric("RF 價格預測誤差", f"{lstm_mape:.1%}",
+                      delta="✅ 低（<3%）" if lstm_mape < 0.03 else "⚠️ 中（3-6%）" if lstm_mape < 0.06 else "❌ 高（>6%）",
+                      delta_color="normal" if lstm_mape < 0.03 else "off" if lstm_mape < 0.06 else "inverse")
+            k4.metric("RF 方向", f"{'▲ 漲' if rf_dir else '▼ 跌'}",
+                      delta="與 XGBoost 一致 ✅" if agree else "與 XGBoost 相反 ⚠️",
+                      delta_color="normal" if agree else "inverse")
+
+            # ── 數字判讀說明卡 ──
+            st.markdown("""
+            <div style="background:#f8faff;border:1px solid #e0e7ff;border-radius:10px;
+                        padding:12px 18px;font-size:0.8rem;color:#374151;margin-top:8px;">
+                <b>📖 數字怎麼看：</b><br>
+                • <b>XGBoost 回測準確率</b>：越高越好。60% 以上有參考價值；55% 以下接近隨機猜測，不建議依賴<br>
+                • <b>RF 預測誤差（MAPE）</b>：越低越好。3% 以下為佳；超過 6% 代表價格預測偏差大<br>
+                • <b>信心度</b>：越高越好。65% 以上訊號較強；50% 表示模型猶豫、漲跌各半<br>
+                • <b>雙模型一致</b>：最重要的指標。兩個模型同向才值得參考，方向相反時建議觀望
+            </div>
+            """, unsafe_allow_html=True)
 
             # 未來價格預測表
             section_card(f"📈 RF 未來 {predict_days} 日價格預測", "#1d4ed8")
