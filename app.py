@@ -992,23 +992,49 @@ elif module == "🤖 AI 選股":
                 df = get_stock_history(ticker, period)
                 if df.empty: return pd.DataFrame()
                 df = df.copy()
+                # ── 均線系統 ──
                 df['MA5']   = df['Close'].rolling(5).mean()
                 df['MA20']  = df['Close'].rolling(20).mean()
                 df['MA60']  = df['Close'].rolling(60).mean()
+                df['MA5_slope']  = df['MA5'].diff(3) / df['MA5'].shift(3)
+                df['MA20_slope'] = df['MA20'].diff(5) / df['MA20'].shift(5)
+                df['Price_MA20'] = df['Close'] / df['MA20'] - 1   # 價格偏離均線
+                df['MA5_MA20']   = df['MA5'] / df['MA20'] - 1     # 均線乖離
+                # ── RSI ──
                 delta = df['Close'].diff()
                 gain  = delta.clip(lower=0).rolling(14).mean()
                 loss  = (-delta.clip(upper=0)).rolling(14).mean()
                 df['RSI'] = 100 - (100 / (1 + gain / loss.replace(0, 1e-10)))
+                df['RSI_slope'] = df['RSI'].diff(3)               # RSI 動能方向
+                # ── MACD ──
                 ema12 = df['Close'].ewm(span=12).mean()
                 ema26 = df['Close'].ewm(span=26).mean()
                 df['MACD']        = ema12 - ema26
                 df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
-                ma20 = df['Close'].rolling(20).mean()
+                df['MACD_Hist']   = df['MACD'] - df['MACD_Signal']  # 柱狀圖
+                df['MACD_Cross']  = (df['MACD_Hist'] > 0).astype(int)  # 黃金/死亡交叉
+                # ── 布林通道 ──
+                ma20  = df['Close'].rolling(20).mean()
                 std20 = df['Close'].rolling(20).std()
-                df['BB_Width']  = (ma20 + 2*std20 - (ma20 - 2*std20)) / ma20
-                df['Momentum']  = df['Close'].pct_change(5)
-                df['Volatility']= df['Close'].rolling(10).std()
-                df['Target_Dir']= (df['Close'].shift(-1) > df['Close']).astype(int)
+                df['BB_Upper'] = ma20 + 2*std20
+                df['BB_Lower'] = ma20 - 2*std20
+                df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / ma20
+                df['BB_Pos']   = (df['Close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'] + 1e-10)
+                # ── 量價關係 ──
+                df['Vol_MA5']    = df['Volume'].rolling(5).mean()
+                df['Vol_Ratio']  = df['Volume'] / (df['Vol_MA5'] + 1e-10)  # 量比
+                df['Price_Vol']  = df['Close'].pct_change() * df['Vol_Ratio']  # 量價共振
+                # ── 動能與波動 ──
+                df['Momentum1']  = df['Close'].pct_change(1)
+                df['Momentum3']  = df['Close'].pct_change(3)
+                df['Momentum5']  = df['Close'].pct_change(5)
+                df['Momentum10'] = df['Close'].pct_change(10)
+                df['Volatility'] = df['Close'].rolling(10).std() / df['Close'].rolling(10).mean()
+                df['High_Low']   = (df['High'] - df['Low']) / df['Close']  # 當日振幅
+                # ── 趨勢強度 ──
+                df['ADX_proxy']  = df['Volatility'].rolling(14).mean()  # 趨勢強度近似
+                # ── 目標變數 ──
+                df['Target_Dir'] = (df['Close'].shift(-1) > df['Close']).astype(int)
                 return df.dropna()
 
             df_feat = build_features(ticker_full, "2y")
@@ -1017,8 +1043,11 @@ elif module == "🤖 AI 選股":
             # 如果 df_raw 最新價跟 df_feat 差距超過 5%，用 df_feat 的（避免時間不同步）
             _raw_price  = float(df_raw['Close'].iloc[-1])
             _use_price  = _raw_price if abs(_raw_price - _sync_price) / _sync_price < 0.05 else _sync_price
-            features = ['MA5','MA20','MA60','RSI','MACD','MACD_Signal',
-                        'BB_Width','Momentum','Volatility']
+            features = ['MA5','MA20','MA60','MA5_slope','MA20_slope','Price_MA20','MA5_MA20',
+                        'RSI','RSI_slope','MACD','MACD_Signal','MACD_Hist','MACD_Cross',
+                        'BB_Width','BB_Pos','Vol_Ratio','Price_Vol',
+                        'Momentum1','Momentum3','Momentum5','Momentum10',
+                        'Volatility','High_Low','ADX_proxy']
 
             # ══ XGBoost 訓練 ══
             with st.spinner("XGBoost 訓練中（漲跌方向預測）..."):
@@ -1031,12 +1060,20 @@ elif module == "🤖 AI 選股":
                 X_tr, X_te = X[:split], X[split:]
                 y_tr, y_te = y[:split], y[split:]
 
+                # 處理漲跌不平衡：計算 scale_pos_weight
+                n_down = (y_tr == 0).sum()
+                n_up   = (y_tr == 1).sum()
+                spw    = n_down / max(n_up, 1)
                 xgb_model = xgb.XGBClassifier(
-                    n_estimators=200, max_depth=4, learning_rate=0.05,
-                    subsample=0.8, colsample_bytree=0.8,
+                    n_estimators=300, max_depth=4, learning_rate=0.03,
+                    subsample=0.8, colsample_bytree=0.7,
+                    min_child_weight=3, gamma=0.1, reg_alpha=0.1,
+                    scale_pos_weight=spw,       # 處理漲跌不平衡
                     eval_metric='logloss', verbosity=0
                 )
-                xgb_model.fit(X_tr, y_tr)
+                xgb_model.fit(X_tr, y_tr,
+                    eval_set=[(X_te, y_te)],
+                    verbose=False)
                 xgb_acc  = (xgb_model.predict(X_te) == y_te).mean()
                 # 預測明日
                 last_feat = df_feat[features].iloc[-1:].values
